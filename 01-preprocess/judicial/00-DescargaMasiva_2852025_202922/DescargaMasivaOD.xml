@@ -1,0 +1,21 @@
+<DescargaMasiva>
+  <Descarga totalMb="123.73 MB" aut="e7392669-6075-4f37-a13c-6cf40223ff64" />
+  <Archivos>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/1997/judiciales_bd_catalogos_1997_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/1998/judiciales_bd_catalogos_1998_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/1999/judiciales_bd_catalogos_1999_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2000/judiciales_bd_catalogos_2000_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2001/judiciales_bd_catalogos_2001_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2002/judiciales_bd_catalogos_2002_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2003/Judiciales_BD_Catalogos_2003_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2004/Judiciales_BD_Catalogos_2004_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2005/Judiciales_BD_Catalogos_2005_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2006/Judiciales_BD_Catalogos_2006_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2007/Judiciales_BD_Catalogos_2007_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2008/Judiciales_BD_Catalogos_2008_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2009/Judiciales_BD_Catalogos_2009_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2010/Judiciales_BD_Catalogos_2010_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2011/Judiciales_BD_Catalogos_2011_dbf.zip</Archivo>
+    <Archivo>https://www.inegi.org.mx/contenidos/programas/judicialespenal/microdatos/2012/Judiciales_BD_Catalogos_2012_dbf.zip</Archivo>
+  </Archivos>
+</DescargaMasiva>

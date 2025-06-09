@@ -1,0 +1,5 @@
+pyunpack>=0.2.2
+patool>=1.12
+dbfread>=2.0.7
+azure.ai.documentintelligence>=5.0.0
+azure.core>=5.0.0
