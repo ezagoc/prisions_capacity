@@ -31,7 +31,7 @@ months_seq <- tibble(
 munpan <- munpan |> crossing(months_seq)
 
 coded <- readxl::read_excel(paste0(pf, 
-      'Judiciales_BD_Catalogos_2009_dbf/CatalogosMicrodatos_2009/CDEL2009_coded.xlsx')) |>
+                                   'Judiciales_BD_Catalogos_2009_dbf/CatalogosMicrodatos_2009/CDEL2009_coded.xlsx')) |>
   rename(B_DELITO = CVE_DEL)
 
 # For loop for all years:
@@ -276,7 +276,7 @@ preprocess_judicial_2009 <- function(year, panel = T){
                                      preventive_petty = preventive*petty, 
                                      formal_prision_drug = formal_prision*crime_8, 
                                      formal_prision_theft = formal_prision*crime_5) |> # I can add more later, for now these seem like interesting ones
-      filter(man == 1 & federal == 1) |> filter(crime_11 == 0) |>
+      filter(man == 1 & federal == 0) |> filter(crime_11 == 0) |>
       filter(is.na(code_inegi_rh) == F)
     
     preg.agg <- preg.agg |> group_by(code_inegi_rh, month_auto) |> 
@@ -294,7 +294,7 @@ preprocess_judicial_2009 <- function(year, panel = T){
     
     # Finally with actual sentences
     
-    sreg.agg <- sreg.final |> filter(federal == 1 & is.na(code_inegi_rh) == F & 
+    sreg.agg <- sreg.final |> filter(federal == 0 & is.na(code_inegi_rh) == F & 
                                        man == 1 & crime_sent_11 == 0)
     
     sreg.agg <- sreg.agg |>
@@ -304,7 +304,7 @@ preprocess_judicial_2009 <- function(year, panel = T){
              sent_prison_theft = sent_prison*crime_sent_5, 
              sent_int_exc_ext = ifelse(sent_prison==0, NA, B_PRIVA)) |>
       group_by(code_inegi_rh, month_sent) |> 
-      summarise(across(c(sent_prison_marg:sent_prison_theft, sent_prison, 
+      summarise(across(c(sent_prison_marg:sent_prison_petty, sent_prison, 
                          sent_money), ~sum(.x, na.rm = T)), 
                 sent_intensive = mean(B_PRIVA, na.rm = T), 
                 sent_intensive_incl = mean(sent_int_exc_ext, na.rm = T)) |>
@@ -323,5 +323,5 @@ preprocess_judicial_2009 <- function(year, panel = T){
 panel.all <- c(2009:2012) |>
   map_dfr(~preprocess_judicial_2009(.x, panel = T))
 
-write_parquet(panel.all, paste0(pfo, 'panel_2009_2012.parquet.gzip'), 
+write_parquet(panel.all, paste0(pfo, 'panel_comun_2009_2012.parquet.gzip'), 
               compression = 'gzip')
