@@ -1,0 +1,44 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+ocr/
+**/.venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and caches
+*.log
+*.sqlite3
+*.db
+*.egg-info/
+*.egg
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# VS Code settings
+.vscode/
+
+# Spyder settings
+.spyderproject
+.spyproject
+
+# Output
+*.out
+*.aux
+*.toc
+
+# Jupyter runtime
+~$*
