@@ -13,7 +13,7 @@ ENV/
 env/
 ocr/
 **/.venv/
-
+**/.Rhistory
 # OS files
 .DS_Store
 Thumbs.db

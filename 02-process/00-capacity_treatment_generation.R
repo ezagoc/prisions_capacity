@@ -1,0 +1,236 @@
+###################################################
+## Data Processing: capacity treatment generation
+## Author: Eduardo Zago-Cuevas (all errors are my own)
+## Run before: same folder, a number before
+## Output: Cpacity panel for DiD
+##
+###################################################
+
+# install.packages('pacman')
+
+pacman::p_load(tidyverse, arrow, purrr, sf)
+
+rm(list = ls())
+rstudioapi::getActiveDocumentContext
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+# Paths:
+# In
+pf <- '../../data/00-map/'
+
+# Out
+pfo <- '../../data/03-analysis/'
+# Datasets used across all years
+
+# Municipalities shapefile
+
+mp2 <- read_sf('../../data/00-map/shapefiles1/00mun.shp')
+
+mp <- read_sf('../../data/00-map/shapefiles2/Muni_2012gw.shp')
+
+mp2 <- st_transform(mp2, crs = st_crs(mp))
+
+# Federal prisons and state regions
+
+fed <- readxl::read_excel(paste0(pf, 'prisiones_federales.xlsx')) |> 
+  select(name, date_opening, latitude, longitude, capacity, private, closed) |>
+  mutate(date_opening = as.Date(date_opening))
+
+reg <- readxl::read_excel(paste0(pf, 'catalogo_entidades.xlsx'))
+
+# Prision panel
+
+prisp <- read_parquet(paste0(pf, 'capacity/final/final_panel_capacity.parquet.gzip'))
+
+test1 <- prisp |> filter(capacity_clean == 0)
+nrow(test1) # has to be 0
+
+prisp <- prisp |> arrange(prison_id, year, month)
+test <- prisp |> filter(total_clean == 0 & comun_clean != 0)
+nrow(test) # has to be 0
+
+# Fix the small cases where federal>total, federal = total, total = 0
+
+prisp <- prisp |> 
+  mutate(total_clean = ifelse(federal_clean>total_clean, 
+                              federal_clean + comun_clean, total_clean))
+
+test2 <- prisp |> filter(federal_clean > total_clean)
+nrow(test2) # has to be 0
+
+prisp <- prisp |> 
+  mutate(total_clean = ifelse(federal_clean==total_clean, 
+                              federal_clean + comun_clean, total_clean))
+
+test3 <- prisp |> filter(federal_clean==total_clean & total_clean != 0)
+nrow(test3) # has to be 3
+
+# Finally build the outcome variables
+
+prisp <- prisp |> mutate(overcrowding = total_clean - capacity_clean, 
+                         relative_overcrowding = overcrowding/capacity_clean, 
+                         perc_federal = federal_clean/total_clean)
+
+### 5 prisons are temporal: they never register population because inmates are 
+## sent later to other prisons. I eliminate these ones.
+
+out <- c('17_xochitepec', '11_comonfort', '10_santa_maria_del_oro', 
+         '22_amealco_de_bonfil', '22_cadereyta_de_montes', '26_alamos', '22_toliman')
+
+prisp <- prisp |> filter(!prison_id %in% out)
+
+# Prision deduplicated dataset
+
+names <- prisp |> group_by(prison_id) |> 
+  summarise(center_name = first(na.omit(center_name_clean))) |>
+  ungroup()
+
+prisd <- prisp |> distinct(prison_id, .keep_all = T) |> 
+  select(prison_id, lat_manual, long_manual) |> left_join(names)
+
+# First we merge using the geometry of the municipalities:
+
+prisd <- prisd |> st_as_sf(coords = c("long_manual", "lat_manual"), 
+                           crs = st_crs(mp))
+
+# For some reason the campeche ones do not merge so we do it manually
+
+prisd <-  st_join(prisd, mp2)
+
+prisd <- prisd |> mutate(CVE_ENT = ifelse(prison_id == '4_ciudad_del_carmen', 
+                                          '04', ifelse(prison_id == '4_koben', 
+                                                       '04', CVE_ENT)), 
+                         CVE_MUN = ifelse(prison_id == '4_ciudad_del_carmen', 
+                                          '003', ifelse(prison_id == '4_koben', 
+                                                        '002', CVE_MUN)), 
+                         NOMGEO = ifelse(prison_id == '4_ciudad_del_carmen', 
+                                         'Carmen', ifelse(prison_id == '4_koben', 
+                                                          'Campeche', NOMGEO)))
+
+# Merge with state region
+
+prisd <- prisd |> left_join(reg)
+
+# Now for the federal, just merge to get the state and region where it is in
+
+fed <- fed |> st_as_sf(coords = c("longitude", "latitude"), 
+                       crs = st_crs(mp))
+
+fed <-  st_join(fed, mp2)
+
+fed <- fed |> left_join(reg) |> arrange(date_opening)
+
+fed_final <- fed |> 
+  filter(between(date_opening, as.Date(paste0('31-12-1999'), format = "%d-%m-%Y"),
+                 as.Date(paste0('31-12-2014'), format = "%d-%m-%Y")))
+
+fed_final <- fed_final |> arrange(date_opening) |> mutate(code_prison = row_number())
+
+fed2 <- fed_final |> st_set_geometry(NULL)
+
+# Generate zone and state dummies: 
+
+prisd <- prisd |> mutate(treat_zone = ifelse(region %in% fed_final$region, 1, 0), 
+                         treat_state = ifelse(CVE_ENT %in% fed_final$CVE_ENT, 1, 0))
+
+## Generate time dummies in the panel for each federal prison
+
+prisp <- prisp |> 
+  mutate(date_panel = as.Date(paste0('28-', month, '-', year), 
+                              format = "%d-%m-%Y"))
+
+
+# Federal treatment, has to be time invariant (they hosted federal inmates at one point or not)
+# For the percentiles: 10, 25, 50
+
+ft <- prisp |> group_by(prison_id) |> 
+  summarise(perc_federal = max(perc_federal, na.rm = T)) |> ungroup() |>
+  arrange(prison_id)
+
+p50 <- quantile(ft$perc_federal, 0.50, na.rm = TRUE)
+
+ft <- ft |> mutate(federal_1 = ifelse(perc_federal>0, 1, 0), 
+                   federal_p50 = ifelse(perc_federal>p50, 1, 0), 
+                   federal_25p = ifelse(perc_federal>.25, 1, 0))
+
+# Lets generate first the minimum distance to a federal prison: 
+
+# Unique time points in your panel
+
+prisp <- prisp |> st_as_sf(coords = c("long_manual", "lat_manual"), 
+                           crs = st_crs(mp))
+
+prisp <- st_transform(prisp, 6372)
+fed <- st_transform(fed, 6372)
+
+# For looopppp
+results <- list()
+dates <- unique(fed_final$date_opening)
+dates <- c(as.Date('1999-09-01'), dates, as.Date('2020-01-01'))
+for (i in 1:14){
+  initial_date <- dates[i]
+  final_date <- dates[i+1]
+  
+  fed_filter <- fed |> filter(date_opening < final_date)
+  
+  state_filter <- prisp |> 
+    filter(date_panel >= initial_date & date_panel < final_date)
+  
+  # Compute distance matrix (only to open prisons)
+  dist_mat <- st_distance(state_filter, fed_filter)
+  
+  # Get minimum distance for each state prison at that date
+  state_filter$min_dist_to_fed <- apply(dist_mat, 1, min)
+  
+  results[[i]] <- state_filter
+}
+
+prisp <- bind_rows(results) |> mutate(min_dist_to_fed_km = min_dist_to_fed / 1000)
+
+# I can generate now the dummies of KM and the continuous KM variable:btreat is binary, ctreat is continuous
+
+prisp <- prisp |> mutate(btreat_100KM = ifelse(min_dist_to_fed_km<100, 1, 0), 
+                         btreat_200KM = ifelse(min_dist_to_fed_km<200, 1, 0), 
+                         btreat_300KM = ifelse(min_dist_to_fed_km<300, 1, 0), 
+                         btreat_400KM = ifelse(min_dist_to_fed_km<400, 1, 0), 
+                         btreat_500KM = ifelse(min_dist_to_fed_km<500, 1, 0), 
+                         btreat_750KM = ifelse(min_dist_to_fed_km<750, 1, 0), 
+                         ctreat_100KM = ifelse(min_dist_to_fed_km<100, 
+                                               min_dist_to_fed_km, 0), 
+                         ctreat_200KM = ifelse(min_dist_to_fed_km<200, 
+                                               min_dist_to_fed_km, 0), 
+                         ctreat_300KM = ifelse(min_dist_to_fed_km<300, 
+                                               min_dist_to_fed_km, 0), 
+                         ctreat_400KM = ifelse(min_dist_to_fed_km<400, 
+                                               min_dist_to_fed_km, 0), 
+                         ctreat_500KM = ifelse(min_dist_to_fed_km<500, 
+                                               min_dist_to_fed_km, 0), 
+                         ctreat_750KM = ifelse(min_dist_to_fed_km<750, 
+                                               min_dist_to_fed_km, 0))
+# Now let's generate 
+
+prisp <- prisp |> select(-CVE_ENT) |> st_set_geometry(NULL) |> 
+  left_join(prisd |> st_set_geometry(NULL) |> select(prison_id, CVEGEO:treat_state)) 
+
+# Generate the time dummy for state and region
+
+prisp <- prisp |> left_join(fed_final |> st_set_geometry(NULL) |> 
+                              distinct(CVE_ENT, .keep_all = T) |> select(CVE_ENT, 
+                                                treat_date_state = date_opening), 
+                            by = 'CVE_ENT')
+
+prisp <- prisp |> left_join(fed_final |> st_set_geometry(NULL) |> 
+                              distinct(region, .keep_all = T) |>
+                              select(region, treat_date_region = date_opening), 
+                            by = 'region')
+
+prisp <- prisp |> 
+  mutate(treat_post_state = ifelse(date_panel >= treat_date_state, 1, 0), 
+         treat_post_region = ifelse(date_panel >= treat_date_region, 1, 0), 
+         treat_post_state = ifelse(is.na(treat_post_state) == T, 0, treat_post_state), 
+         treat_post_region = ifelse(is.na(treat_post_region) == T, 0, treat_post_region))
+
+prisp <- prisp |> arrange(prison_id, year, month)
+
+write_parquet(prisp, paste0(pfo, 'panel_capacity.parquet.gzip'), 
+              compression = 'gzip')
