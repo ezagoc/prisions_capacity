@@ -2,7 +2,7 @@
 ## Data Processing: capacity treatment generation
 ## Author: Eduardo Zago-Cuevas (all errors are my own)
 ## Run before: same folder, a number before
-## Output: Cpacity panel for DiD
+## Output: Capacity panel for DiD
 ##
 ###################################################
 
@@ -24,11 +24,8 @@ pfo <- '../../data/03-analysis/'
 
 # Municipalities shapefile
 
-mp2 <- read_sf('../../data/00-map/shapefiles1/00mun.shp')
-
-mp <- read_sf('../../data/00-map/shapefiles2/Muni_2012gw.shp')
-
-mp2 <- st_transform(mp2, crs = st_crs(mp))
+mp <- read_sf('../../data/00-map/shapefiles2/Muni_2012gw.shp') |> 
+  select(-c(OID_1:cov_id))
 
 # Federal prisons and state regions
 
@@ -89,13 +86,13 @@ prisd <- prisp |> distinct(prison_id, .keep_all = T) |>
   select(prison_id, lat_manual, long_manual) |> left_join(names)
 
 # First we merge using the geometry of the municipalities:
-
+prisd_lat <- prisd |> select(prison_id, long_manual, lat_manual)
 prisd <- prisd |> st_as_sf(coords = c("long_manual", "lat_manual"), 
                            crs = st_crs(mp))
 
 # For some reason the campeche ones do not merge so we do it manually
 
-prisd <-  st_join(prisd, mp2)
+prisd <-  st_join(prisd, mp)
 
 prisd <- prisd |> mutate(CVE_ENT = ifelse(prison_id == '4_ciudad_del_carmen', 
                                           '04', ifelse(prison_id == '4_koben', 
@@ -103,20 +100,24 @@ prisd <- prisd |> mutate(CVE_ENT = ifelse(prison_id == '4_ciudad_del_carmen',
                          CVE_MUN = ifelse(prison_id == '4_ciudad_del_carmen', 
                                           '003', ifelse(prison_id == '4_koben', 
                                                         '002', CVE_MUN)), 
-                         NOMGEO = ifelse(prison_id == '4_ciudad_del_carmen', 
+                         NOM_MUN = ifelse(prison_id == '4_ciudad_del_carmen', 
                                          'Carmen', ifelse(prison_id == '4_koben', 
-                                                          'Campeche', NOMGEO)))
+                                                          'Campeche', NOM_MUN)))
+
 
 # Merge with state region
 
-prisd <- prisd |> left_join(reg)
+prisd <- prisd |> left_join(reg) |> left_join(prisd_lat, by = 'prison_id')
+
+write_parquet(prisd |> st_set_geometry(NULL), 
+              paste0(pfo, 'individual_prisons_municipalities.parquet.gzip'))
 
 # Now for the federal, just merge to get the state and region where it is in
 
 fed <- fed |> st_as_sf(coords = c("longitude", "latitude"), 
                        crs = st_crs(mp))
 
-fed <-  st_join(fed, mp2)
+fed <-  st_join(fed, mp)
 
 fed <- fed |> left_join(reg) |> arrange(date_opening)
 
@@ -160,57 +161,114 @@ ft <- ft |> mutate(federal_1 = ifelse(perc_federal>0, 1, 0),
 prisp <- prisp |> st_as_sf(coords = c("long_manual", "lat_manual"), 
                            crs = st_crs(mp))
 
-prisp <- st_transform(prisp, 6372)
 fed <- st_transform(fed, 6372)
+fed_final <- st_transform(fed_final, 6372)
+prisp <- st_transform(prisp, 6372)
 
-# For looopppp
 results <- list()
 dates <- unique(fed_final$date_opening)
-dates <- c(as.Date('1999-09-01'), dates, as.Date('2020-01-01'))
-for (i in 1:14){
+dates <- c(as.Date('1999-09-01'), dates, as.Date('2015-01-01'))
+
+for (i in 1:14) {
   initial_date <- dates[i]
   final_date <- dates[i+1]
   
   fed_filter <- fed |> filter(date_opening < final_date)
+  state_filter <- prisp |> filter(date_panel >= initial_date & date_panel < final_date)
   
-  state_filter <- prisp |> 
-    filter(date_panel >= initial_date & date_panel < final_date)
-  
-  # Compute distance matrix (only to open prisons)
+  # Compute distance matrix
   dist_mat <- st_distance(state_filter, fed_filter)
   
-  # Get minimum distance for each state prison at that date
-  state_filter$min_dist_to_fed <- apply(dist_mat, 1, min)
+  # Get index of minimum distance and the corresponding value
+  min_index <- apply(dist_mat, 1, which.min)
+  min_dist <- apply(dist_mat, 1, min)
+  
+  # Get names of the closest federal prisons
+  closest_fed_names <- fed_filter$name[min_index]  # replace 'prison_name' with the actual variable
+  
+  # Store results
+  state_filter$min_dist_to_fed <- min_dist
+  state_filter$closest_fed_prison <- closest_fed_names
   
   results[[i]] <- state_filter
 }
 
 prisp <- bind_rows(results) |> mutate(min_dist_to_fed_km = min_dist_to_fed / 1000)
 
+### Now without Occidente and Altiplano: 
+
+results <- list()
+dates <- unique(fed_final$date_opening)
+dates <- c(as.Date('1999-09-01'), dates, as.Date('2015-01-01'))
+
+for (i in 1:14) {
+  initial_date <- dates[i]
+  final_date <- dates[i+1]
+  
+  fed_filter <- fed_final |> filter(date_opening < final_date)
+  state_filter <- prisp |> filter(date_panel >= initial_date & date_panel < final_date)
+  
+  if (nrow(state_filter) == 0) next
+  
+  if (nrow(fed_filter) == 0) {
+    state_filter$min_dist_to_fed2 <- NA_real_
+    state_filter$closest_fed_prison2 <- NA_character_
+  } else {
+    dist_mat <- st_distance(state_filter, fed_filter)
+    min_index <- apply(dist_mat, 1, which.min)
+    min_dist <- apply(dist_mat, 1, min)
+    
+    state_filter$min_dist_to_fed2 <- min_dist
+    state_filter$closest_fed_prison2 <- fed_filter$name[min_index]  # replace as needed
+  }
+  
+  results[[i]] <- state_filter
+}
+
+prisp <- bind_rows(results) |> mutate(min_dist_to_fed_km2 = min_dist_to_fed2 / 1000)
+
+
 # I can generate now the dummies of KM and the continuous KM variable:btreat is binary, ctreat is continuous
 
-prisp <- prisp |> mutate(btreat_100KM = ifelse(min_dist_to_fed_km<100, 1, 0), 
-                         btreat_200KM = ifelse(min_dist_to_fed_km<200, 1, 0), 
-                         btreat_300KM = ifelse(min_dist_to_fed_km<300, 1, 0), 
-                         btreat_400KM = ifelse(min_dist_to_fed_km<400, 1, 0), 
-                         btreat_500KM = ifelse(min_dist_to_fed_km<500, 1, 0), 
-                         btreat_750KM = ifelse(min_dist_to_fed_km<750, 1, 0), 
-                         ctreat_100KM = ifelse(min_dist_to_fed_km<100, 
-                                               min_dist_to_fed_km, 0), 
-                         ctreat_200KM = ifelse(min_dist_to_fed_km<200, 
-                                               min_dist_to_fed_km, 0), 
-                         ctreat_300KM = ifelse(min_dist_to_fed_km<300, 
-                                               min_dist_to_fed_km, 0), 
-                         ctreat_400KM = ifelse(min_dist_to_fed_km<400, 
-                                               min_dist_to_fed_km, 0), 
-                         ctreat_500KM = ifelse(min_dist_to_fed_km<500, 
-                                               min_dist_to_fed_km, 0), 
-                         ctreat_750KM = ifelse(min_dist_to_fed_km<750, 
-                                               min_dist_to_fed_km, 0))
+prisp <- prisp |> 
+  mutate(btreat_100KM2 = ifelse(min_dist_to_fed_km2<100 &
+                                  is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_200KM2 = ifelse(min_dist_to_fed_km2<200 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_300KM2 = ifelse(min_dist_to_fed_km2<300 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_400KM2 = ifelse(min_dist_to_fed_km2<400 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_500KM2 = ifelse(min_dist_to_fed_km2<500 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_750KM2 = ifelse(min_dist_to_fed_km2<750 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0),
+        btreat_100KM = ifelse(min_dist_to_fed_km2<100 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_200KM = ifelse(min_dist_to_fed_km<200 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_300KM = ifelse(min_dist_to_fed_km<300 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_400KM = ifelse(min_dist_to_fed_km<400 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_500KM = ifelse(min_dist_to_fed_km<500 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0), 
+         btreat_750KM = ifelse(min_dist_to_fed_km<750 & 
+                                 is.na(min_dist_to_fed_km2) == F, 1, 0),
+         ctreat_200KM = ifelse(min_dist_to_fed_km<200, 
+                               min_dist_to_fed_km, 0), 
+         ctreat_300KM = ifelse(min_dist_to_fed_km<300, 
+                               min_dist_to_fed_km, 0), 
+         ctreat_400KM = ifelse(min_dist_to_fed_km<400, 
+                               min_dist_to_fed_km, 0), 
+         ctreat_500KM = ifelse(min_dist_to_fed_km<500, 
+                               min_dist_to_fed_km, 0), 
+         ctreat_750KM = ifelse(min_dist_to_fed_km<750, 
+                               min_dist_to_fed_km, 0))
 # Now let's generate 
 
 prisp <- prisp |> select(-CVE_ENT) |> st_set_geometry(NULL) |> 
-  left_join(prisd |> st_set_geometry(NULL) |> select(prison_id, CVEGEO:treat_state)) 
+  left_join(prisd |> st_set_geometry(NULL) |> select(prison_id, CVE_ENT:treat_state)) 
 
 # Generate the time dummy for state and region
 
@@ -231,6 +289,23 @@ prisp <- prisp |>
          treat_post_region = ifelse(is.na(treat_post_region) == T, 0, treat_post_region))
 
 prisp <- prisp |> arrange(prison_id, year, month)
+
+prisp <- prisp |> left_join(ft |> select(-perc_federal), by = c('prison_id'))
+
+# Get date in and out of the panel: 
+
+prisp <- prisp |> 
+  mutate(in_panel = ifelse(is.na(capacity_clean) == T, 0, 1)) |> 
+  group_by(prison_id) |> 
+  mutate(date_in_panel = date_panel[in_panel == 1][1], 
+         date_out_panel = tail(date_panel[in_panel == 1], 1)) |>
+  ungroup()
+
+# Generate a balance panel dummy
+prisp <- prisp |> 
+  mutate(balance_panel = ifelse(date_in_panel == as.Date('2000-02-28') & 
+                                  date_out_panel == as.Date('2014-12-28'), 1, 0))
+
 
 write_parquet(prisp, paste0(pfo, 'panel_capacity.parquet.gzip'), 
               compression = 'gzip')

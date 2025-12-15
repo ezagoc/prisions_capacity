@@ -8,7 +8,7 @@
 
 # install.packages('pacman')
 
-pacman::p_load(tidyverse, arrow, foreign, purrr)
+pacman::p_load(tidyverse, arrow, foreign, purrr, sf)
 
 rm(list = ls())
 rstudioapi::getActiveDocumentContext
@@ -22,7 +22,10 @@ pf <- '../../../data/01-judicial/00-sentencing/raw/'
 pfo <- '../../../data/01-judicial/00-sentencing/final/'
 # Datasets used across all years
 
-munpan <- read_parquet('../../../data/00-map/municipalities.parquet')
+munpan <- read_sf('../../../data/00-map/shapefiles2/Muni_2012gw.shp') |> 
+  select(-c(OID_1:cov_id)) |> st_set_geometry(NULL) |> 
+  mutate(code_inegi = as.numeric(CVE_ENT) * 1000 + as.numeric(CVE_MUN)) |>
+  arrange(code_inegi)
 
 months_seq <- tibble(
   month = c(1:12)
@@ -38,6 +41,7 @@ coded <- readxl::read_excel(paste0(pf,
 
 preprocess_judicial_2009 <- function(year, panel = T){
   # Read all files
+  #year <- 2009
   preg <- read.dbf(paste0(pf, 'Judiciales_BD_Catalogos_', year, 
                           '_dbf/TablasMicrodatos_', year, '/preg', year, 
                           '.DBF'), as.is = T) # Registry: Processed
@@ -89,14 +93,13 @@ preprocess_judicial_2009 <- function(year, panel = T){
            CVE_ENT_ocu = ifelse(B_ENTOC != '99', as.numeric(B_ENTOC), NA),  
            CVE_MUN_ocu = ifelse(B_MUNOC != '999', as.numeric(B_MUNOC), NA), 
            code_inegi_ocu = CVE_ENT_ocu*1000 + CVE_MUN_ocu, # Code inegi ocurrence of crime
-           formal_prision = ifelse(B_AUTO == 1, 1, 0), # Control Judge determined there is evidence to start a penal process
-           proceso = ifelse(B_AUTO == 2, 1, 0), # Same
-           preventive = ifelse(B_AUTO == 5, 1, 0), # Sent to preventive prison
+           formal_prision = ifelse(B_AUTO %in% c(1, 5), 1, 0), # Formal prision en el antiguo sistema significaba preventiva
+           proceso = ifelse(B_AUTO == 2, 1, 0), # Sujecion a proceso
            free = ifelse(B_AUTO %in% c(3, 4, 6, 0), 1, 0), # Freed
-           petty = ifelse(B_CALIFICA == 2, 1, 0), # Crime is classified as petty
-           federal_imp = ifelse(B_FUERO == 2, 1, 0)) 
+           petty = ifelse(B_CALIFICA == 2, 1, 0) # Crime is classified as petty
+         ) 
   
-  pdel.ind <- pdel.ind |> select(ID_PS, code_delito = B_DELITO, DESC_DEL:federal_imp)
+  pdel.ind <- pdel.ind |> select(ID_PS, code_delito = B_DELITO, DESC_DEL:petty)
   
   # Clean up the registry of processed:
   
@@ -166,12 +169,12 @@ preprocess_judicial_2009 <- function(year, panel = T){
            CVE_ENT_ocu = ifelse(B_ENTOC != '99', as.numeric(B_ENTOC), NA),  
            CVE_MUN_ocu = ifelse(B_MUNOC != '999', as.numeric(B_MUNOC), NA), 
            code_inegi_ocu = CVE_ENT_ocu*1000 + CVE_MUN_ocu, 
-           sentenced_imp = ifelse(B_SENTEN %in% c(1), 1, 0), 
-           petty = ifelse(B_CALIFICA == 2, 1, 0), 
-           federal_imp = ifelse(B_FUERO == 2, 1, 0))
+           condenado = ifelse(B_SENTEN %in% c(1), 1, 0), 
+           absolutoria = ifelse(B_SENTEN %in% c(2), 1, 0), 
+           petty = ifelse(B_CALIFICA == 2, 1, 0))
   
   sdel.ind <- sdel.ind |> select(ID_PS, code_delito = B_DELITO, 
-                                 DESC_DEL:federal_imp)
+                                 DESC_DEL:petty)
   ### After: Generate a marginalized index: LI, Ocupation, Conalf, Nivel In, 
   
   # Now merge back 
@@ -205,7 +208,8 @@ preprocess_judicial_2009 <- function(year, panel = T){
            sent_prison = ifelse(B_PRIVA > 0, 1, 0), # Resolución judicial que pone fin a un proceso o juicio en una instancia o a un recurso extraordinario.
            # En el caso particular de las Estadísticas judiciales en materia penal, está referida a un juicio 
            # en primera instancia.
-           sent_money = ifelse(B_PECU > 0 | B_MULTA > 0, 1, 0) # NICE PLACEBO
+           sent_money = ifelse(B_PECU > 0 | B_MULTA > 0, 1, 0) , # NICE PLACEBO
+           only_sent_money = ifelse(sent_money == 1 & sent_prison == 0, 1, 0)
     )
   
   sreg.final <- sreg |> left_join(sdel.ind, by = 'ID_PS')
@@ -218,78 +222,69 @@ preprocess_judicial_2009 <- function(year, panel = T){
   }else{
     preg.agg.p <- preg.final |> mutate(date_auto = date_auto - 3, #72 hours before the judge decides
                                        month_auto = month(date_auto)) |>
-      filter(is.na(code_inegi_rh) == F & is.na(code_inegi_ocu) == F) |> 
-      filter(man == 1)
+      filter(is.na(code_inegi_rh) == F) |> 
+      filter(man == 1) |> filter(federal == 0)
     
-    preg.agg.rh <- preg.agg.p |> mutate(diff_ocu_auto = as.numeric(date_auto - date_ocu), 
-                                        state = ifelse(federal == 0, 1, 0), 
-                                        state_petty = state*petty, 
-                                        state_drugs = state*crime_8, 
-                                        state_guns = state*crime_10, 
-                                        state_theft = state*crime_5, 
-                                        federal_petty = federal*petty, 
-                                        federal_drugs = federal*crime_8, 
-                                        federal_guns = federal*crime_10, 
-                                        federal_theft = federal*crime_5) |>
+    preg.agg.rh <- preg.agg.p |> mutate(diff_ocu_auto = as.numeric(date_auto - date_ocu)
+                                        ) |>
       group_by(code_inegi_rh, month_auto) |> 
-      summarise(across(c(state:federal_theft, federal, 
+      summarise(across(c(petty, 
                          all_of(paste0('crime_', 1:14)), 
                          marg_condition), ~sum(.x, na.rm = T)), 
-                diff_ocu_auto = mean(diff_ocu_auto, na.rm = T), 
+                diff_ocu_auto = sum(diff_ocu_auto, na.rm = T), 
                 total_processed = n()) |> ungroup()
     
-    preg.agg.ocu <- preg.agg.p |> mutate(diff_ocu_auto = as.numeric(date_auto - date_ocu), 
-                                         state = ifelse(federal == 0, 1, 0), 
-                                         state_petty = state*petty, 
-                                         state_drugs = state*crime_8, 
-                                         state_guns = state*crime_10, 
-                                         state_theft = state*crime_5, 
-                                         federal_petty = federal*petty, 
-                                         federal_drugs = federal*crime_8, 
-                                         federal_guns = federal*crime_10, 
-                                         federal_theft = federal*crime_5) |>
-      group_by(code_inegi_ocu, month_auto) |> 
-      summarise(across(c(state:federal_theft, federal, 
-                         all_of(paste0('crime_', 1:14)), 
-                         marg_condition), ~sum(.x, na.rm = T)), 
-                diff_ocu_auto = mean(diff_ocu_auto, na.rm = T), 
-                total_processed = n()) |> ungroup()
-    
-    colnames(preg.agg.ocu)[3:length(preg.agg.ocu)] <- paste0(colnames(preg.agg.ocu)[3:length(preg.agg.ocu)], 
-                                                             '_ocu')
+    # preg.agg.ocu <- preg.agg.p |> mutate(diff_ocu_auto = as.numeric(date_auto - date_ocu), 
+    #                                      state = ifelse(federal == 0, 1, 0), 
+    #                                      state_petty = state*petty, 
+    #                                      state_drugs = state*crime_8, 
+    #                                      state_guns = state*crime_10, 
+    #                                      state_theft = state*crime_5, 
+    #                                      federal_petty = federal*petty, 
+    #                                      federal_drugs = federal*crime_8, 
+    #                                      federal_guns = federal*crime_10, 
+    #                                      federal_theft = federal*crime_5) |>
+    #   group_by(code_inegi_ocu, month_auto) |> 
+    #   summarise(across(c(state:federal_theft, federal, 
+    #                      all_of(paste0('crime_', 1:14)), 
+    #                      marg_condition), ~sum(.x, na.rm = T)), 
+    #             diff_ocu_auto = mean(diff_ocu_auto, na.rm = T), 
+    #             total_processed = n()) |> ungroup()
+    # 
+    # colnames(preg.agg.ocu)[3:length(preg.agg.ocu)] <- paste0(colnames(preg.agg.ocu)[3:length(preg.agg.ocu)], 
+    #                                                          '_ocu')
     
     # Merge with panel: 
     
     final.panel <- munpan |>
       mutate(year = year) |> left_join(preg.agg.rh, 
                                        by = c('code_inegi' = 'code_inegi_rh', 
-                                              'month' = 'month_auto')) |>
-      left_join(preg.agg.ocu, 
-                by = c('code_inegi' = 'code_inegi_ocu', 
-                       'month' = 'month_auto')) |> 
-      mutate(across(c(state:total_processed_ocu), ~ifelse(is.na(.x) == T, 0, .x)))
+                                               'month' = 'month_auto')) |> 
+      mutate(across(c(crime_1:total_processed), ~ifelse(is.na(.x) == T, 0, .x)))  #|>
+      # left_join(preg.agg.ocu, 
+      #           by = c('code_inegi' = 'code_inegi_ocu', 
+      #                  'month' = 'month_auto')) |> 
+      # mutate(across(c(state:total_processed_ocu), ~ifelse(is.na(.x) == T, 0, .x)))
     
     # For Judges first interaction with individuals:
     preg.agg <- preg.final |> mutate(formal_prision_marg = formal_prision*marg_condition, 
                                      formal_prision_petty = formal_prision*petty, 
-                                     preventive_marg = preventive*marg_condition, 
-                                     preventive_petty = preventive*petty, 
                                      formal_prision_drug = formal_prision*crime_8, 
                                      formal_prision_theft = formal_prision*crime_5) |> # I can add more later, for now these seem like interesting ones
       filter(man == 1 & federal == 0) |> filter(crime_11 == 0) |>
       filter(is.na(code_inegi_rh) == F)
-    
+
     preg.agg <- preg.agg |> group_by(code_inegi_rh, month_auto) |> 
       summarise(across(c(formal_prision_marg:formal_prision_theft, 
-                         formal_prision:petty), ~sum(.x, na.rm = T))) |> 
-      ungroup() |> mutate(proceso_formal = formal_prision + proceso)
+                         formal_prision:free), ~sum(.x, na.rm = T))) |> 
+      ungroup() #|> mutate(proceso_formal = formal_prision + proceso)
     
     # In this case we aggregate at date of auto determination (Juzgado de Control)
     
     final.panel <- final.panel |> left_join(preg.agg, 
                                             by = c('code_inegi' = 'code_inegi_rh', 
                                                    'month' = 'month_auto')) |>
-      mutate(across(c(formal_prision_marg:proceso_formal), 
+      mutate(across(c(formal_prision_marg:free), 
                     ~ifelse(is.na(.x) == T, 0, .x)))
     
     # Finally with actual sentences
@@ -305,9 +300,10 @@ preprocess_judicial_2009 <- function(year, panel = T){
              sent_int_exc_ext = ifelse(sent_prison==0, NA, B_PRIVA)) |>
       group_by(code_inegi_rh, month_sent) |> 
       summarise(across(c(sent_prison_marg:sent_prison_petty, sent_prison, 
-                         sent_money), ~sum(.x, na.rm = T)), 
-                sent_intensive = mean(B_PRIVA, na.rm = T), 
-                sent_intensive_incl = mean(sent_int_exc_ext, na.rm = T)) |>
+                         sent_money, only_sent_money, condenado, absolutoria), ~sum(.x, na.rm = T)), 
+                n_sentenced = n(), 
+                sent_intensive = sum(B_PRIVA, na.rm = T), 
+                sent_intensive_incl = sum(sent_int_exc_ext, na.rm = T)) |>
       ungroup()
     
     final.panel <- final.panel |> left_join(sreg.agg, 
